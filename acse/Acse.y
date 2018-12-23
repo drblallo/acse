@@ -93,6 +93,43 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
 extern int yylex(void);
 extern int yyerror(const char* errmsg);
 
+char* swappedString1 = NULL;
+char* swappedString2 = NULL;
+
+char* getRealIdentifier(char* originalString)
+{
+	if (!isInSwappedContest())
+		return originalString;
+
+	if (strcmp(originalString, swappedString1) == 0)
+		return swappedString2;
+
+	if (strcmp(originalString, swappedString2) == 0)
+		return swappedString1;
+
+	return originalString;
+}
+
+void saveSwapped(char* s1, char* s2)
+{
+	swappedString1 = strdup(s1);
+	swappedString2 = strdup(s2);
+}
+
+void deleteSwapped()
+{
+	free(swappedString1);
+	swappedString1 = NULL;
+
+	free(swappedString2);
+	swappedString2 = NULL;
+}
+
+int isInSwappedContest()
+{
+	return (swappedString2 != NULL);
+}
+
 %}
 %expect 1
 
@@ -124,6 +161,7 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token ALIAS
 
 %token <label> DO
 %token <while_stmt> WHILE
@@ -236,6 +274,21 @@ code_block  : statement                  { /* does nothing */ }
             | LBRACE statements RBRACE   { /* does nothing */ }
 ;
 
+alias_block : ALIAS IDENTIFIER IDENTIFIER
+			{
+				if (isInSwappedContest())
+					yyerror("multiple alias blocks");
+				saveSwapped($2, $3);
+			} 
+			LBRACE statements RBRACE
+			{
+				deleteSwapped();
+				free($2);
+				free($3);
+			}
+;
+
+
 /* One or more code statements */
 statements  : statements statement       { /* does nothing */ }
             | statement                  { /* does nothing */ }
@@ -253,6 +306,7 @@ control_statement : if_statement         { /* does nothing */ }
             | while_statement            { /* does nothing */ }
             | do_while_statement SEMI    { /* does nothing */ }
             | return_statement SEMI      { /* does nothing */ }
+            | alias_block                {}
 ;
 
 read_write_statement : read_statement  { /* does nothing */ }
@@ -267,7 +321,7 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
                 * the array/pointer identifier, $3 is an expression
                 * that holds an integer value. That value will be
                 * used as an index for the array $1 */
-               storeArrayElement(program, $1, $3, $6);
+               storeArrayElement(program, getRealIdentifier($1), $3, $6);
 
                /* free the memory associated with the IDENTIFIER.
                 * The use of the free instruction is required
@@ -292,7 +346,7 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
                 * the variable with $1 as identifier */
                
                /* get the location of the symbol with the given ID. */
-               location = get_symbol_location(program, $1, 0);
+               location = get_symbol_location(program, getRealIdentifier($1), 0);
 
                /* update the value of location */
                if ($3.expression_type == IMMEDIATE)
@@ -428,7 +482,7 @@ read_statement : READ LPAR IDENTIFIER RPAR
                
                /* lookup the symbol table and fetch the register location
                 * associated with the IDENTIFIER $3. */
-               location = get_symbol_location(program, $3, 0);
+               location = get_symbol_location(program, getRealIdentifier($3), 0);
 
                /* insert a read instruction */
                gen_read_instruction (program, location);
@@ -462,7 +516,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                      int location;
    
                      /* get the location of the symbol with the given ID */
-                     location = get_symbol_location(program, $1, 0);
+                     location = get_symbol_location(program, getRealIdentifier($1), 0);
                      
                      /* return the register location of IDENTIFIER as
                       * a value for `exp' */
@@ -476,7 +530,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                      
                      /* load the value IDENTIFIER[exp]
                       * into `arrayElement' */
-                     reg = loadArrayElement(program, $1, $3);
+                     reg = loadArrayElement(program, getRealIdentifier($1), $3);
 
                      /* create a new expression */
                      $$ = create_expression (reg, REGISTER);
@@ -495,7 +549,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
    
                            /* get the location of the symbol with the given ID */
                            identifier_location =
-                                 get_symbol_location(program, $2, 0);
+                                 get_symbol_location(program, getRealIdentifier($2), 0);
 
                            /* generate a NOT instruction. In order to do this,
                             * at first we have to ask for a free register where

@@ -97,6 +97,7 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
 "return"          { return RETURN; }
 "read"            { return READ; }
 "write"           { return WRITE; }
+"alias"           { return ALIAS; }
 
 {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
 {DIGIT}+          { yylval.intval = atoi( yytext );
@@ -106,3 +107,4 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
                     num_error++;
                     return (-1); /* invalid token */
                   }
+
