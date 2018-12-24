@@ -93,6 +93,28 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
 extern int yylex(void);
 extern int yyerror(const char* errmsg);
 
+
+int getArrayLenght(char* ID)
+{
+	t_axe_variable *var;
+	var = getVariable(program, ID);
+
+	
+	if (!var)
+	{
+		printf("error: var %s was not an var", ID );
+		return -1;
+	}
+
+	if (!var->isArray)
+	{
+		printf("error: var %s was not an array", ID );
+		return -1;
+	}
+
+	return var->arraySize;
+}
+
 %}
 %expect 1
 
@@ -124,6 +146,7 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token POP PUSH INTO FROM IS_FULL IS_EMPTY
 
 %token <label> DO
 %token <while_stmt> WHILE
@@ -213,7 +236,7 @@ declaration : IDENTIFIER ASSIGN NUMBER
             | IDENTIFIER LSQUARE NUMBER RSQUARE
             {
                /* create a new instance of t_axe_declaration */
-               $$ = alloc_declaration($1, 1, $3, 0);
+               $$ = alloc_declaration($1, 1, $3 + 1, 0);
 
                   /* test if an `out of memory' occurred */
                if ($$ == NULL)
@@ -247,7 +270,66 @@ statement   : assign_statement SEMI      { /* does nothing */ }
             | control_statement          { /* does nothing */ }
             | read_write_statement SEMI  { /* does nothing */ }
             | SEMI            { gen_nop_instruction(program); }
+            | push_into SEMI {}
+            | pop_from SEMI {}
 ;
+
+push_into	: PUSH exp INTO IDENTIFIER 
+			{
+				int arraySize, reg;
+				t_axe_expression stack_size_exp;
+				t_axe_expression stack_size_off_exp;
+
+				arraySize = getArrayLenght($4);
+				
+				if (arraySize <= 0)
+					yyerror("error");
+
+				stack_size_off_exp = create_expression(REG_0, REGISTER);
+				/*gen_nop_instruction(program);*/
+
+				reg = loadArrayElement(program, $4, stack_size_off_exp);
+				
+				int newReg = getNewRegister(program);
+				gen_addi_instruction(program, newReg, reg, 1);
+
+				stack_size_exp = create_expression(newReg, REGISTER);
+				storeArrayElement(program, $4, stack_size_exp, $2);
+				storeArrayElement(program, $4, stack_size_off_exp, stack_size_exp);
+			
+				free($4);
+			};
+
+pop_from	: POP IDENTIFIER FROM IDENTIFIER
+			{
+				int arraySizeReg;
+				int poppedValueReg;
+				int arrayMaxSize = getArrayLenght($4);
+				t_axe_expression exp_zero = create_expression(REG_0, REGISTER);
+				t_axe_expression exp_stack_top;
+				t_axe_expression exp_popped_element;
+				int location = get_symbol_location(program, $2, 0);
+
+				if (arrayMaxSize <= 0)
+					yyerror("error");
+				
+				arraySizeReg = loadArrayElement(program, $4, exp_zero);
+				exp_stack_top = create_expression(arraySizeReg, REGISTER);
+
+				poppedValueReg = loadArrayElement(program, $4, exp_stack_top);
+
+				int newReg = getNewRegister(program);
+
+				gen_subi_instruction(program, newReg, arraySizeReg, 1);
+				exp_stack_top.value = newReg;
+				storeArrayElement(program, $4, exp_zero, exp_stack_top);
+
+				gen_add_instruction(program, location, REG_0, poppedValueReg, CG_DIRECT_ALL);
+
+				free($2);
+				free($4);
+				printf("\n\nqua\n\n");
+			};
 
 control_statement : if_statement         { /* does nothing */ }
             | while_statement            { /* does nothing */ }
@@ -267,7 +349,20 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
                 * the array/pointer identifier, $3 is an expression
                 * that holds an integer value. That value will be
                 * used as an index for the array $1 */
-               storeArrayElement(program, $1, $3, $6);
+				
+				t_axe_expression exp = $3;
+
+				if (exp.expression_type == IMMEDIATE)
+					exp.value++;
+				else
+				{
+					int reg = getNewRegister(program);
+					gen_addi_instruction(program, reg, $3.value, 1);
+					exp.value = reg;
+				}
+
+
+               storeArrayElement(program, $1, exp, $6);
 
                /* free the memory associated with the IDENTIFIER.
                 * The use of the free instruction is required
@@ -476,7 +571,18 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                      
                      /* load the value IDENTIFIER[exp]
                       * into `arrayElement' */
-                     reg = loadArrayElement(program, $1, $3);
+
+						t_axe_expression exp = $3;
+
+						if (exp.expression_type == IMMEDIATE)
+							exp.value++;
+						else
+						{
+							int reg2 = getNewRegister(program);
+							gen_addi_instruction(program, reg2, exp.value, 1);
+							exp.value = reg2;
+						}
+                     reg = loadArrayElement(program, $1, exp);
 
                      /* create a new expression */
                      $$ = create_expression (reg, REGISTER);
@@ -516,6 +622,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
    }
    | exp OR_OP exp      {
                            $$ = handle_bin_numeric_op(program, $1, $3, ORB);
+
    }
    | exp PLUS exp       {
                            $$ = handle_bin_numeric_op(program, $1, $3, ADD);
@@ -570,6 +677,38 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                                  (program, exp_r0, $2, SUB);
                         }
                      }
+    | IS_FULL IDENTIFIER 
+	{  
+		int reg = loadArrayElement(program, $2, create_expression(0, IMMEDIATE));
+		int arraySize = getArrayLenght($2);
+		
+		if (arraySize <= 0)
+			yyerror("error\n");
+
+		int returnReg = getNewRegister(program);
+		
+		gen_subi_instruction(program, returnReg, reg, arraySize - 1);
+		
+		gen_notl_instruction(program, returnReg, returnReg);
+		$$ = create_expression(returnReg, REGISTER);
+
+		free($2);
+	}
+	| IS_EMPTY IDENTIFIER 
+	{
+		int reg = loadArrayElement(program, $2, create_expression(0, IMMEDIATE));
+		int arraySize = getArrayLenght($2);
+		
+		if (arraySize <= 0)
+			yyerror("error\n");
+		
+		int returnReg = getNewRegister(program);
+		
+		gen_notl_instruction(program, returnReg, reg);
+
+		$$ = create_expression(returnReg, REGISTER);
+		free($2);
+	}
 ;
 
 %%

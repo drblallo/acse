@@ -97,6 +97,12 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
 "return"          { return RETURN; }
 "read"            { return READ; }
 "write"           { return WRITE; }
+"push"            { return PUSH; }
+"into"            { return INTO; }
+"pop"             { return POP; }
+"from"            { return FROM; }
+"is-empty"        { return IS_EMPTY; }
+"is-full"         { return IS_FULL; }
 
 {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
 {DIGIT}+          { yylval.intval = atoi( yytext );
