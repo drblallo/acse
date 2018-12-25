@@ -76,6 +76,15 @@ typedef struct t_axe_instruction
                                   * instruction */
 }t_axe_instruction;
 
+typedef struct t_foreach_statement
+{
+   t_axe_label *begin;
+   t_axe_label *secondBlock;
+   t_axe_label *condition;
+   int counter;
+   int iterationCounter;
+} t_foreach_statement;
+
 /* this structure is used in order to define assembler directives.
  * Directives are used in many cases such the definition of variables
  * inside the data segment. Every instance `t_axe_data' contains

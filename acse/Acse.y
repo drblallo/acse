@@ -93,6 +93,33 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
 extern int yylex(void);
 extern int yyerror(const char* errmsg);
 
+int isArray(char * ID)
+{
+	t_axe_variable* var;
+	var = getVariable(program, ID);
+
+	if (!var)
+		return 0;
+
+	return var->isArray;
+}
+
+int getArrayLenght(char * ID)
+{
+	t_axe_variable* var;
+	var = getVariable(program, ID);
+
+
+	if (!var)
+		return -1;
+
+	if (!var->isArray)
+		return -1;
+
+	return var->arraySize;
+
+}
+
 %}
 %expect 1
 
@@ -108,6 +135,7 @@ extern int yyerror(const char* errmsg);
    t_list *list;
    t_axe_label *label;
    t_while_statement while_stmt;
+   t_foreach_statement foreach_stmt;
 } 
 /*=========================================================================
                                TOKENS 
@@ -124,6 +152,7 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token IN EVERY 
 
 %token <label> DO
 %token <while_stmt> WHILE
@@ -132,6 +161,7 @@ extern int yyerror(const char* errmsg);
 %token <intval> TYPE
 %token <svalue> IDENTIFIER
 %token <intval> NUMBER
+%token <foreach_stmt> FOREACH
 
 %type <expr> exp
 %type <decl> declaration
@@ -253,6 +283,7 @@ control_statement : if_statement         { /* does nothing */ }
             | while_statement            { /* does nothing */ }
             | do_while_statement SEMI    { /* does nothing */ }
             | return_statement SEMI      { /* does nothing */ }
+			| foreach_every_statment SEMI {}
 ;
 
 read_write_statement : read_statement  { /* does nothing */ }
@@ -307,6 +338,111 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
                /* free the memory associated with the IDENTIFIER */
                free($1);
             }
+;
+
+
+foreach_every_statment	: FOREACH IDENTIFIER IN IDENTIFIER 
+						{
+							if (isArray($2))	
+							{
+								yyerror("Error\n");
+								YYABORT;
+							}
+							
+							if (!isArray($4))
+							{
+								yyerror("Error\n");
+								YYABORT;
+							}
+
+							//label located before the first block
+							$1.begin = newLabel(program); 
+							//label locaed before the secon block
+							$1.secondBlock = newLabel(program); 
+							//label located before the condition
+							$1.condition = newLabel(program); 
+							//register used to keep track of the current index
+							$1.counter = getNewRegister(program); 
+							//used to keep track of the "every" iteration
+							$1.iterationCounter = getNewRegister(program); 
+
+							//initialize the counters to 0
+							gen_move_immediate(program, $1.counter, 0);
+							gen_move_immediate(program, $1.iterationCounter, 0);
+
+							//jump to the condition as soon as we enter
+							gen_bt_instruction(program, $1.condition, 0);
+
+							//mark normal code
+							assignLabel(program, $1.begin);
+						}
+						code_block 
+						{
+							//as soon as the first block ends, we jump to the condition
+							gen_bt_instruction(program, $1.condition, 0);
+							
+							//mark the next section with the proper label
+							assignLabel(program, $1.secondBlock);
+							
+							//every time we go here we reset the iteration counter.
+							gen_move_immediate(program, $1.iterationCounter, 0);
+
+						}
+						EVERY NUMBER DO code_block
+						{
+							if ($9 < 2)
+							{
+								yyerror("Error");
+								YYABORT;
+							}
+
+							int arraySize = getArrayLenght($4);
+
+							//assign the condition label
+							assignLabel(program, $1.condition); 
+							
+							//find out where the first symbol is
+							int destination = get_symbol_location(program, $2, 0);
+							//load the next arrayElement 
+							int source = loadArrayElement(program, $4, create_expression($1.counter, REGISTER));
+							//save the array element in the proper location
+							gen_addi_instruction(program, destination, source, 0);
+
+							//use a new register to check if we have to jump back
+							int check_exp = getNewRegister(program);
+							//subtract the array size from the iteration count
+							gen_subi_instruction(program, 
+												check_exp, 
+												$1.counter,
+												arraySize - 1);
+
+							//we need a label after the construct
+							t_axe_label* outLabel = newLabel(program);
+
+							//jump out on false, we are done with the loop
+							gen_beq_instruction(program, outLabel, 0);
+
+							//add one to the counter
+							gen_addi_instruction(program, $1.counter, $1.counter, 1);
+							gen_addi_instruction(program, $1.iterationCounter, $1.iterationCounter, 1);
+							
+							//check if the iter counter is equal to the one provided
+							gen_subi_instruction(program, 
+												check_exp,
+												$1.iterationCounter, 
+												$9);
+
+							//jump to second block if counter is equl
+							gen_beq_instruction(program, $1.secondBlock, 0);
+							//jump to first block otherwise
+							gen_bt_instruction(program, $1.begin, 0);
+
+							//do clean up here since we need the string here too.
+							free($2);
+							free($4);
+							assignLabel(program, outLabel);
+							printf("\n\nquaasd\n\n");
+						}
 ;
             
 if_statement   : if_stmt
