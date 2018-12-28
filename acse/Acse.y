@@ -93,6 +93,29 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
 extern int yylex(void);
 extern int yyerror(const char* errmsg);
 
+
+int isArray(char* ID)
+{
+	t_axe_variable* var = getVariable(program, ID);
+	if (!var)
+		return 0;
+	
+	return var->isArray;
+}
+
+int getArrayLenght(char* ID)
+{
+	t_axe_variable* var = getVariable(program, ID);
+
+	if (!var)
+		return -1;
+
+	if (!var->isArray)
+		return -1;
+
+	return var->arraySize;
+}
+
 %}
 %expect 1
 
@@ -124,6 +147,7 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token REDUCTION
 
 %token <label> DO
 %token <while_stmt> WHILE
@@ -458,6 +482,40 @@ write_statement : WRITE LPAR exp RPAR
 ;
 
 exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+   | REDUCTION LPAR IDENTIFIER RPAR {
+
+		//stop parsing if the identifier is not a array
+		if (!isArray($3))		
+			notifyError(AXE_INVALID_INSTRUCTION);
+
+		//find out the size
+		int arraySize = getArrayLenght($3);
+		//reserve space for accumulator and counter
+		int acc = getNewRegister(program);
+		int ctr = getNewRegister(program);
+
+		//set accumulator to zero, counter to array size
+		gen_move_immediate(program, acc, 0);
+		gen_move_immediate(program, ctr, arraySize);
+
+		//fix a label used to iterate
+		t_axe_label* label = newLabel(program);
+		assignLabel(program, label);
+
+		//next step of the iteration
+		gen_subi_instruction(program, ctr, ctr, 1);
+		
+		//load a array member based on the counter		
+		int loadedValue = loadArrayElement(program, $3, create_expression(ctr, REGISTER));
+
+		//add to the accumulator, check if counter reaced zero, if not jump back
+		gen_add_instruction(program, acc, acc, loadedValue, CG_DIRECT_ALL);
+		gen_andb_instruction(program, ctr, ctr, ctr, CG_DIRECT_ALL);
+		gen_bne_instruction(program, label, 0);
+		
+		$$ = create_expression(acc, REGISTER);
+		free($3);
+   }
    | IDENTIFIER  {
                      int location;
    
