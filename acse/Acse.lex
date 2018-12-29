@@ -69,6 +69,7 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
 ":"               { return COLON; }
 "+"               { return PLUS; }
 "-"               { return MINUS; }
+"[*]"             { return SOFT_MULT_OP; }
 "*"               { return MUL_OP; }
 "/"               { return DIV_OP; }
 "%"               { return MOD_OP; }

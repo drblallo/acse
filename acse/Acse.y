@@ -93,6 +93,16 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
 extern int yylex(void);
 extern int yyerror(const char* errmsg);
 
+int getRegisterOfExpression(t_axe_expression* exp)
+{
+	int reg;
+	if (exp->expression_type == IMMEDIATE)	
+		reg = gen_load_immediate(program, exp->value);
+	else
+		reg = exp->value;
+
+	return reg;
+}
 %}
 %expect 1
 
@@ -124,6 +134,7 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token SOFT_MULT_OP
 
 %token <label> DO
 %token <while_stmt> WHILE
@@ -152,7 +163,7 @@ extern int yyerror(const char* errmsg);
 %left LT GT LTEQ GTEQ
 %left SHL_OP SHR_OP
 %left MINUS PLUS
-%left MUL_OP DIV_OP
+%left MUL_OP SOFT_MULT_OP DIV_OP
 %right NOT
 
 /*=========================================================================
@@ -570,6 +581,51 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                                  (program, exp_r0, $2, SUB);
                         }
                      }
+	| exp SOFT_MULT_OP exp 
+	{
+		//if both are IMMEDIATE, just find out the result at compile time
+		if ($1.expression_type == IMMEDIATE && $3.expression_type == IMMEDIATE)
+		{
+			$$ = create_expression($1.value * $3.value, IMMEDIATE);
+		}
+		else
+		{
+			//find out where left and right operand are located
+			int lReg = getRegisterOfExpression(&$1);
+			int rReg = getRegisterOfExpression(&$3);
+			
+			//reserve a label for the cycle and for the end 
+			t_axe_label* outLabel = newLabel(program);
+			t_axe_label* skipLabel = newLabel(program);
+
+			//initialize return value
+			int returnRegister = gen_load_immediate(program, 0);
+			int counterRegister = getNewRegister(program);
+			int copiedLreg = getNewRegister(program);
+			gen_add_instruction(program, copiedLreg, lReg, REG_0,  CG_DIRECT_ALL);
+
+			//if right operand is zero jump out, if is positive skip to the cycle
+			gen_add_instruction(program, counterRegister, rReg, REG_0, CG_DIRECT_ALL);
+			gen_beq_instruction(program, outLabel, 0);
+			gen_bpl_instruction(program, skipLabel, 0);
+
+			//only executed if right operand is negative, multiply left and right by -1
+			gen_sub_instruction(program, counterRegister, REG_0, counterRegister, CG_DIRECT_ALL);
+			gen_sub_instruction(program, copiedLreg, REG_0, lReg, CG_DIRECT_ALL);
+
+			//main cycle
+			assignLabel(program, skipLabel);
+			//add left register to return value, subtrack one from the counter
+			gen_add_instruction(program, returnRegister, returnRegister, copiedLreg, CG_DIRECT_ALL);
+			gen_subi_instruction(program, counterRegister, counterRegister, 1);
+			
+			//if we are not done yet do another cycle
+			gen_bne_instruction(program, skipLabel, 0);
+
+			assignLabel(program, outLabel);
+			$$ = create_expression(returnRegister, REGISTER); 
+		}
+	}
 ;
 
 %%
