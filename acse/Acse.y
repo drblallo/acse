@@ -132,6 +132,7 @@ extern int yyerror(const char* errmsg);
 %token <intval> TYPE
 %token <svalue> IDENTIFIER
 %token <intval> NUMBER
+%token <label> IFF
 
 %type <expr> exp
 %type <decl> declaration
@@ -351,6 +352,22 @@ if_stmt  :  IF
                      gen_beq_instruction (program, $1, 0);
                }
                code_block { $$ = $1; }
+		| IFF  
+			{
+				$1 = newLabel(program);
+			}
+			LPAR assign_statement SEMI exp RPAR
+			{
+                     if ($6.expression_type == IMMEDIATE)
+                         gen_load_immediate(program, $6.value);
+                     else
+                         gen_andb_instruction(program, $6.value,
+                             $6.value, $6.value, CG_DIRECT_ALL);
+
+                     /* if `exp' returns FALSE, jump to the label $1 */
+                     gen_beq_instruction (program, $1, 0);
+			}
+			code_block { $$ = $1; }
 ;
 
 while_statement  : WHILE
