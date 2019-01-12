@@ -93,6 +93,46 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
 extern int yylex(void);
 extern int yyerror(const char* errmsg);
 
+char* getMetadataID(char* ID)
+{
+	char* newName = (char*) malloc((strlen(ID) + 2)* sizeof(char));
+	newName[0] = '_';
+	strcpy(newName + 1, ID);
+
+	return newName;
+}
+
+int isArray(char *ID)
+{
+	t_axe_variable* var = getVariable(program, ID);
+	return (var && var->isArray);
+}
+
+int getArrayLenght(char* ID)
+{
+	t_axe_variable* var = getVariable(program, ID);
+
+	if (!var || !var->isArray)
+		return -1;
+
+	return var->arraySize;
+}
+
+int getRegisterOfExpression(t_axe_expression* exp)
+{
+	if (exp->expression_type == IMMEDIATE)
+		return gen_load_immediate(program, exp->value);
+	else
+		return exp->value;
+}
+
+t_axe_declaration* allocateMetadataDeclaration(t_axe_declaration* decl)
+{
+	if (!decl->isArray)
+		return 0;
+
+	return alloc_declaration(getMetadataID(decl->ID), 0, 0, 0);
+}
 %}
 %expect 1
 
@@ -124,6 +164,12 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token PUSH
+%token POP
+%token FROM
+%token INTO
+%token IS_EMPTY
+%token IS_FULL
 
 %token <label> DO
 %token <while_stmt> WHILE
@@ -193,11 +239,17 @@ var_declaration   : TYPE declaration_list SEMI
 declaration_list  : declaration_list COMMA declaration
                   {  /* add the new declaration to the list of declarations */
                      $$ = addElement($1, $3, -1);
+                     t_axe_declaration* metaData = allocateMetadataDeclaration($3);
+                     if (metaData)
+                       $$ = addElement($$, metaData, -1);
                   }
                   | declaration
                   {
                      /* add the new declaration to the list of declarations */
                      $$ = addElement(NULL, $1, -1);
+                     t_axe_declaration* metaData = allocateMetadataDeclaration($1);
+                     if (metaData)
+                       $$ = addElement($$, metaData, -1);
                   }
 ;
 
@@ -246,7 +298,61 @@ statements  : statements statement       { /* does nothing */ }
 statement   : assign_statement SEMI      { /* does nothing */ }
             | control_statement          { /* does nothing */ }
             | read_write_statement SEMI  { /* does nothing */ }
+			| push_pop_statemet SEMI     {}
             | SEMI            { gen_nop_instruction(program); }
+;
+
+push_pop_statemet : push_statement {}
+				  | pop_statement  {}
+;
+
+push_statement : PUSH exp INTO IDENTIFIER
+			   {
+					if (!isArray($4))     
+						notifyError(AXE_INVALID_VARIABLE);
+					char* metaDataID = getMetadataID($4);
+					
+					int arrySize = getArrayLenght($4);
+					int metaDataReg = get_symbol_location(program, metaDataID, 0);
+					int suppReg = getNewRegister(program);
+					t_axe_label* skipLabel = newLabel(program);
+					
+					gen_subi_instruction(program, suppReg, metaDataReg, arrySize);
+					gen_beq_instruction(program, skipLabel, 0);
+
+					storeArrayElement(program, $4, create_expression(metaDataReg, REGISTER), $2);
+					gen_addi_instruction(program, metaDataReg, metaDataReg, 1);
+					
+					assignLabel(program, skipLabel);
+					
+					free(metaDataID);
+					free($4);
+               }
+;
+
+pop_statement : POP IDENTIFIER FROM IDENTIFIER
+			  {
+					if (!isArray($4))     
+						notifyError(AXE_INVALID_VARIABLE);
+					
+					char* metaDataID = getMetadataID($4);
+
+					int metaDataReg = get_symbol_location(program, metaDataID, 0);
+					int intoReg = get_symbol_location(program, $2, 0);
+					t_axe_label* skipLabel = newLabel(program);
+					
+					gen_andb_instruction(program, metaDataReg, metaDataReg, metaDataReg, CG_DIRECT_ALL);
+					gen_beq_instruction(program, skipLabel, 0);
+					int valReg = loadArrayElement(program, $4, create_expression(metaDataReg, REGISTER));
+					gen_addi_instruction(program, intoReg, valReg, 0);
+					gen_subi_instruction(program, metaDataReg, metaDataReg, 1);
+					
+					assignLabel(program, skipLabel);
+
+					free($4);
+					free(metaDataID);
+					free($2);
+			  }
 ;
 
 control_statement : if_statement         { /* does nothing */ }
@@ -570,6 +676,41 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                                  (program, exp_r0, $2, SUB);
                         }
                      }
+	| IS_FULL IDENTIFIER 
+	{
+		if (!isArray($2))
+			notifyError(AXE_INVALID_VARIABLE);
+
+		char* metaDataID = getMetadataID($2);
+		int arraySize = getArrayLenght($2);
+		int metaDataReg = get_symbol_location(program, metaDataID, 0);
+
+		int outReg = getNewRegister(program);
+
+		gen_subi_instruction(program, outReg, metaDataReg, arraySize);
+		gen_seq_instruction(program, outReg);
+
+		$$ = create_expression(outReg, REGISTER);
+			
+		free($2);
+	}
+
+	| IS_EMPTY IDENTIFIER
+	{
+		if (!isArray($2))
+			notifyError(AXE_INVALID_VARIABLE);
+
+		char* metaDataID = getMetadataID($2);
+		
+		int metaDataReg = get_symbol_location(program, metaDataID, 0);
+		int outReg = getNewRegister(program);
+		gen_addi_instruction(program, outReg, metaDataReg, 0);
+		gen_seq_instruction(program, outReg);
+		$$ = create_expression(outReg, REGISTER);
+
+		free(metaDataID);
+		free($2);
+	}
 ;
 
 %%
