@@ -124,6 +124,7 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token MERGE
 
 %token <label> DO
 %token <while_stmt> WHILE
@@ -570,6 +571,32 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                                  (program, exp_r0, $2, SUB);
                         }
                      }
+	| MERGE exp COMMA exp COMMA exp 
+	{
+		if ($6.expression_type == IMMEDIATE)
+		{
+			if ($6.value == 0)
+				$$ = $4;
+			else
+				$$ = $2;
+		}
+		else
+		{
+			int supp = getNewRegister(program);
+			int negSupp = getNewRegister(program);
+
+			gen_andb_instruction(program, REG_0, $6.value, $6.value, CG_DIRECT_ALL);
+			gen_seq_instruction(program, supp);
+			gen_notl_instruction(program, negSupp, supp);
+
+			t_axe_expression negSupp_exp = create_expression(negSupp, REGISTER);
+			t_axe_expression supp_exp = create_expression(supp, REGISTER);
+
+			t_axe_expression leftHand = handle_bin_numeric_op(program, supp_exp, $4, MUL);
+			t_axe_expression rightHand = handle_bin_numeric_op(program, negSupp_exp, $2, MUL);
+			$$ = handle_bin_numeric_op(program, leftHand, rightHand, ADD);
+		}
+	}
 ;
 
 %%
