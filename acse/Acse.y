@@ -93,6 +93,23 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
 extern int yylex(void);
 extern int yyerror(const char* errmsg);
 
+
+int isArray(char* ID)
+{
+	t_axe_variable* var = getVariable(program, ID);
+	return (var && var->isArray);
+}
+
+int getArrayLenght(char* ID)
+{
+	t_axe_variable* var = getVariable(program, ID);
+
+	if (!var || !var->isArray)
+		return -1;
+
+	return var->arraySize;
+}
+
 %}
 %expect 1
 
@@ -124,7 +141,11 @@ extern int yyerror(const char* errmsg);
 %token RETURN
 %token READ
 %token WRITE
+%token OF
 
+%token <label> SUM
+%token <label> OUT
+%token <expr> AS
 %token <label> DO
 %token <while_stmt> WHILE
 %token <label> IF
@@ -137,6 +158,7 @@ extern int yyerror(const char* errmsg);
 %type <decl> declaration
 %type <list> declaration_list
 %type <label> if_stmt
+%type <expr> sum_out_of
 
 /*=========================================================================
                           OPERATOR PRECEDENCES
@@ -307,6 +329,11 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
                /* free the memory associated with the IDENTIFIER */
                free($1);
             }
+			| IDENTIFIER ASSIGN sum_out_of {
+				int reg = get_symbol_location(program, $1, 0);
+				gen_addi_instruction(program, reg, $3.value, 0);
+				free($1);
+			}
 ;
             
 if_statement   : if_stmt
@@ -570,6 +597,75 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
                                  (program, exp_r0, $2, SUB);
                         }
                      }
+;
+
+sum_out_of	: SUM IDENTIFIER COMMA IDENTIFIER OUT OF IDENTIFIER AS 
+			{
+				if (!isArray($7))
+					notifyError(AXE_INVALID_VARIABLE);
+				
+				//iteration label
+				$1 = newLabel(program); 
+				//out label
+				$5 = newLabel(program);
+				//out expression
+				$8 = create_expression(getNewRegister(program), REGISTER);
+
+				//iteration counter
+				int counterReg = getNewRegister(program);
+				int endPoint = getArrayLenght($7) - 1;
+
+				//expression of the cunter
+				t_axe_expression counterExp = create_expression(counterReg, REGISTER);
+
+				//position of the provided variables
+				int firstReg = get_symbol_location(program, $2, 0);
+				int secondReg = get_symbol_location(program, $4, 0);
+				
+				//set counter to zero, set out accumulator to zero
+				gen_move_immediate(program, counterReg, 0);
+				gen_move_immediate(program, $8.value, 0);
+
+				//fix iteration label
+				assignLabel(program, $1);
+			
+				//get a register used to save partial values	
+				int helperReg = getNewRegister(program);
+				//check if we reached the end of the array
+				gen_subi_instruction(program, helperReg, counterReg, endPoint);
+				//if we did, we jump out
+				gen_beq_instruction(program, $5, 0);
+
+				//load an element and store into the first variable
+				helperReg = loadArrayElement(program, $7, counterExp);
+				gen_addi_instruction(program, firstReg, helperReg, 0);
+
+				//increase the counter by one
+				gen_addi_instruction(program, counterReg, counterReg, 1);
+				
+				//load the next element and store it into the second variable	
+				helperReg = loadArrayElement(program, $7, counterExp);
+				gen_addi_instruction(program, secondReg, helperReg, 0);
+				
+			} 
+			exp
+			{
+				//accumulate	
+				if ($10.expression_type == IMMEDIATE)
+					gen_addi_instruction(program, $8.value, $8.value, $10.value);
+				else
+					gen_add_instruction(program, $8.value, $8.value, $10.value, CG_DIRECT_ALL);
+
+				//jump back
+				gen_bt_instruction(program, $1, 0);
+
+				//fix out label
+				assignLabel(program, $5);
+				free($7);
+				free($2);
+				free($4);
+				$$ = $8;
+			}
 ;
 
 %%
