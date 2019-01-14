@@ -1,0 +1,1281 @@
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index 8591387..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -92,7 +92,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "else"            { return ELSE; }
+ "for"             { return FOR; }
+ "if"              { return IF; }
+-"iff"             { return IFF; }
+ "int"             { yylval.intval = INTEGER_TYPE; return TYPE; }
+ "while"           { return WHILE; }
+ "return"          { return RETURN; }
+diff --git a/acse/Acse.y b/acse/Acse.y
+index d34c7f0..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -132,7 +132,6 @@ extern int yyerror(const char* errmsg);
+ %token <intval> TYPE
+ %token <svalue> IDENTIFIER
+ %token <intval> NUMBER
+-%token <label> IFF
+ 
+ %type <expr> exp
+ %type <decl> declaration
+@@ -352,22 +351,6 @@ if_stmt  :  IF
+                      gen_beq_instruction (program, $1, 0);
+                }
+                code_block { $$ = $1; }
+-		| IFF  
+-			{
+-				$1 = newLabel(program);
+-			}
+-			LPAR assign_statement SEMI exp RPAR
+-			{
+-                     if ($6.expression_type == IMMEDIATE)
+-                         gen_load_immediate(program, $6.value);
+-                     else
+-                         gen_andb_instruction(program, $6.value,
+-                             $6.value, $6.value, CG_DIRECT_ALL);
+-
+-                     /* if `exp' returns FALSE, jump to the label $1 */
+-                     gen_beq_instruction (program, $1, 0);
+-			}
+-			code_block { $$ = $1; }
+ ;
+ 
+ while_statement  : WHILE
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index 02af83c..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -97,9 +97,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "return"          { return RETURN; }
+ "read"            { return READ; }
+ "write"           { return WRITE; }
+-"foreach"         { return FOREACH; }
+-"in"              { return IN; }
+-"every"           { return EVERY; }
+ 
+ {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
+ {DIGIT}+          { yylval.intval = atoi( yytext );
+diff --git a/acse/Acse.y b/acse/Acse.y
+index cc06aa2..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -93,33 +93,6 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
+ extern int yylex(void);
+ extern int yyerror(const char* errmsg);
+ 
+-int isArray(char * ID)
+-{
+-	t_axe_variable* var;
+-	var = getVariable(program, ID);
+-
+-	if (!var)
+-		return 0;
+-
+-	return var->isArray;
+-}
+-
+-int getArrayLenght(char * ID)
+-{
+-	t_axe_variable* var;
+-	var = getVariable(program, ID);
+-
+-
+-	if (!var)
+-		return -1;
+-
+-	if (!var->isArray)
+-		return -1;
+-
+-	return var->arraySize;
+-
+-}
+-
+ %}
+ %expect 1
+ 
+@@ -135,7 +108,6 @@ int getArrayLenght(char * ID)
+    t_list *list;
+    t_axe_label *label;
+    t_while_statement while_stmt;
+-   t_foreach_statement foreach_stmt;
+ } 
+ /*=========================================================================
+                                TOKENS 
+@@ -152,7 +124,6 @@ int getArrayLenght(char * ID)
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token IN EVERY 
+ 
+ %token <label> DO
+ %token <while_stmt> WHILE
+@@ -161,7 +132,6 @@ int getArrayLenght(char * ID)
+ %token <intval> TYPE
+ %token <svalue> IDENTIFIER
+ %token <intval> NUMBER
+-%token <foreach_stmt> FOREACH
+ 
+ %type <expr> exp
+ %type <decl> declaration
+@@ -283,7 +253,6 @@ control_statement : if_statement         { /* does nothing */ }
+             | while_statement            { /* does nothing */ }
+             | do_while_statement SEMI    { /* does nothing */ }
+             | return_statement SEMI      { /* does nothing */ }
+-			| foreach_every_statment SEMI {}
+ ;
+ 
+ read_write_statement : read_statement  { /* does nothing */ }
+@@ -339,111 +308,6 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
+                free($1);
+             }
+ ;
+-
+-
+-foreach_every_statment	: FOREACH IDENTIFIER IN IDENTIFIER 
+-						{
+-							if (isArray($2))	
+-							{
+-								yyerror("Error\n");
+-								YYABORT;
+-							}
+-							
+-							if (!isArray($4))
+-							{
+-								yyerror("Error\n");
+-								YYABORT;
+-							}
+-
+-							//label located before the first block
+-							$1.begin = newLabel(program); 
+-							//label locaed before the secon block
+-							$1.secondBlock = newLabel(program); 
+-							//label located before the condition
+-							$1.condition = newLabel(program); 
+-							//register used to keep track of the current index
+-							$1.counter = getNewRegister(program); 
+-							//used to keep track of the "every" iteration
+-							$1.iterationCounter = getNewRegister(program); 
+-
+-							//initialize the counters to 0
+-							gen_move_immediate(program, $1.counter, 0);
+-							gen_move_immediate(program, $1.iterationCounter, 0);
+-
+-							//jump to the condition as soon as we enter
+-							gen_bt_instruction(program, $1.condition, 0);
+-
+-							//mark normal code
+-							assignLabel(program, $1.begin);
+-						}
+-						code_block 
+-						{
+-							//as soon as the first block ends, we jump to the condition
+-							gen_bt_instruction(program, $1.condition, 0);
+-							
+-							//mark the next section with the proper label
+-							assignLabel(program, $1.secondBlock);
+-							
+-							//every time we go here we reset the iteration counter.
+-							gen_move_immediate(program, $1.iterationCounter, 0);
+-
+-						}
+-						EVERY NUMBER DO code_block
+-						{
+-							if ($9 < 2)
+-							{
+-								yyerror("Error");
+-								YYABORT;
+-							}
+-
+-							int arraySize = getArrayLenght($4);
+-
+-							//assign the condition label
+-							assignLabel(program, $1.condition); 
+-							
+-							//find out where the first symbol is
+-							int destination = get_symbol_location(program, $2, 0);
+-							//load the next arrayElement 
+-							int source = loadArrayElement(program, $4, create_expression($1.counter, REGISTER));
+-							//save the array element in the proper location
+-							gen_addi_instruction(program, destination, source, 0);
+-
+-							//use a new register to check if we have to jump back
+-							int check_exp = getNewRegister(program);
+-							//subtract the array size from the iteration count
+-							gen_subi_instruction(program, 
+-												check_exp, 
+-												$1.counter,
+-												arraySize - 1);
+-
+-							//we need a label after the construct
+-							t_axe_label* outLabel = newLabel(program);
+-
+-							//jump out on false, we are done with the loop
+-							gen_beq_instruction(program, outLabel, 0);
+-
+-							//add one to the counter
+-							gen_addi_instruction(program, $1.counter, $1.counter, 1);
+-							gen_addi_instruction(program, $1.iterationCounter, $1.iterationCounter, 1);
+-							
+-							//check if the iter counter is equal to the one provided
+-							gen_subi_instruction(program, 
+-												check_exp,
+-												$1.iterationCounter, 
+-												$9);
+-
+-							//jump to second block if counter is equl
+-							gen_beq_instruction(program, $1.secondBlock, 0);
+-							//jump to first block otherwise
+-							gen_bt_instruction(program, $1.begin, 0);
+-
+-							//do clean up here since we need the string here too.
+-							free($2);
+-							free($4);
+-							assignLabel(program, outLabel);
+-							printf("\n\nquaasd\n\n");
+-						}
+-;
+             
+ if_statement   : if_stmt
+                {
+diff --git a/acse/axe_struct.h b/acse/axe_struct.h
+index 0457b94..47663cc 100644
+--- a/acse/axe_struct.h
++++ b/acse/axe_struct.h
+@@ -76,15 +76,6 @@ typedef struct t_axe_instruction
+                                   * instruction */
+ }t_axe_instruction;
+ 
+-typedef struct t_foreach_statement
+-{
+-   t_axe_label *begin;
+-   t_axe_label *secondBlock;
+-   t_axe_label *condition;
+-   int counter;
+-   int iterationCounter;
+-} t_foreach_statement;
+-
+ /* this structure is used in order to define assembler directives.
+  * Directives are used in many cases such the definition of variables
+  * inside the data segment. Every instance `t_axe_data' contains
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index 2e68cd5..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -97,12 +97,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "return"          { return RETURN; }
+ "read"            { return READ; }
+ "write"           { return WRITE; }
+-"push"            { return PUSH; }
+-"into"            { return INTO; }
+-"pop"             { return POP; }
+-"from"            { return FROM; }
+-"is-empty"        { return IS_EMPTY; }
+-"is-full"         { return IS_FULL; }
+ 
+ {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
+ {DIGIT}+          { yylval.intval = atoi( yytext );
+diff --git a/acse/Acse.y b/acse/Acse.y
+index 6a5e872..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -93,28 +93,6 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
+ extern int yylex(void);
+ extern int yyerror(const char* errmsg);
+ 
+-
+-int getArrayLenght(char* ID)
+-{
+-	t_axe_variable *var;
+-	var = getVariable(program, ID);
+-
+-	
+-	if (!var)
+-	{
+-		printf("error: var %s was not an var", ID );
+-		return -1;
+-	}
+-
+-	if (!var->isArray)
+-	{
+-		printf("error: var %s was not an array", ID );
+-		return -1;
+-	}
+-
+-	return var->arraySize;
+-}
+-
+ %}
+ %expect 1
+ 
+@@ -146,7 +124,6 @@ int getArrayLenght(char* ID)
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token POP PUSH INTO FROM IS_FULL IS_EMPTY
+ 
+ %token <label> DO
+ %token <while_stmt> WHILE
+@@ -236,7 +213,7 @@ declaration : IDENTIFIER ASSIGN NUMBER
+             | IDENTIFIER LSQUARE NUMBER RSQUARE
+             {
+                /* create a new instance of t_axe_declaration */
+-               $$ = alloc_declaration($1, 1, $3 + 1, 0);
++               $$ = alloc_declaration($1, 1, $3, 0);
+ 
+                   /* test if an `out of memory' occurred */
+                if ($$ == NULL)
+@@ -270,67 +247,8 @@ statement   : assign_statement SEMI      { /* does nothing */ }
+             | control_statement          { /* does nothing */ }
+             | read_write_statement SEMI  { /* does nothing */ }
+             | SEMI            { gen_nop_instruction(program); }
+-            | push_into SEMI {}
+-            | pop_from SEMI {}
+ ;
+ 
+-push_into	: PUSH exp INTO IDENTIFIER 
+-			{
+-				int arraySize, reg;
+-				t_axe_expression stack_size_exp;
+-				t_axe_expression stack_size_off_exp;
+-
+-				arraySize = getArrayLenght($4);
+-				
+-				if (arraySize <= 0)
+-					yyerror("error");
+-
+-				stack_size_off_exp = create_expression(REG_0, REGISTER);
+-				/*gen_nop_instruction(program);*/
+-
+-				reg = loadArrayElement(program, $4, stack_size_off_exp);
+-				
+-				int newReg = getNewRegister(program);
+-				gen_addi_instruction(program, newReg, reg, 1);
+-
+-				stack_size_exp = create_expression(newReg, REGISTER);
+-				storeArrayElement(program, $4, stack_size_exp, $2);
+-				storeArrayElement(program, $4, stack_size_off_exp, stack_size_exp);
+-			
+-				free($4);
+-			};
+-
+-pop_from	: POP IDENTIFIER FROM IDENTIFIER
+-			{
+-				int arraySizeReg;
+-				int poppedValueReg;
+-				int arrayMaxSize = getArrayLenght($4);
+-				t_axe_expression exp_zero = create_expression(REG_0, REGISTER);
+-				t_axe_expression exp_stack_top;
+-				t_axe_expression exp_popped_element;
+-				int location = get_symbol_location(program, $2, 0);
+-
+-				if (arrayMaxSize <= 0)
+-					yyerror("error");
+-				
+-				arraySizeReg = loadArrayElement(program, $4, exp_zero);
+-				exp_stack_top = create_expression(arraySizeReg, REGISTER);
+-
+-				poppedValueReg = loadArrayElement(program, $4, exp_stack_top);
+-
+-				int newReg = getNewRegister(program);
+-
+-				gen_subi_instruction(program, newReg, arraySizeReg, 1);
+-				exp_stack_top.value = newReg;
+-				storeArrayElement(program, $4, exp_zero, exp_stack_top);
+-
+-				gen_add_instruction(program, location, REG_0, poppedValueReg, CG_DIRECT_ALL);
+-
+-				free($2);
+-				free($4);
+-				printf("\n\nqua\n\n");
+-			};
+-
+ control_statement : if_statement         { /* does nothing */ }
+             | while_statement            { /* does nothing */ }
+             | do_while_statement SEMI    { /* does nothing */ }
+@@ -349,20 +267,7 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
+                 * the array/pointer identifier, $3 is an expression
+                 * that holds an integer value. That value will be
+                 * used as an index for the array $1 */
+-				
+-				t_axe_expression exp = $3;
+-
+-				if (exp.expression_type == IMMEDIATE)
+-					exp.value++;
+-				else
+-				{
+-					int reg = getNewRegister(program);
+-					gen_addi_instruction(program, reg, $3.value, 1);
+-					exp.value = reg;
+-				}
+-
+-
+-               storeArrayElement(program, $1, exp, $6);
++               storeArrayElement(program, $1, $3, $6);
+ 
+                /* free the memory associated with the IDENTIFIER.
+                 * The use of the free instruction is required
+@@ -571,18 +476,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                      
+                      /* load the value IDENTIFIER[exp]
+                       * into `arrayElement' */
+-
+-						t_axe_expression exp = $3;
+-
+-						if (exp.expression_type == IMMEDIATE)
+-							exp.value++;
+-						else
+-						{
+-							int reg2 = getNewRegister(program);
+-							gen_addi_instruction(program, reg2, exp.value, 1);
+-							exp.value = reg2;
+-						}
+-                     reg = loadArrayElement(program, $1, exp);
++                     reg = loadArrayElement(program, $1, $3);
+ 
+                      /* create a new expression */
+                      $$ = create_expression (reg, REGISTER);
+@@ -622,7 +516,6 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+    }
+    | exp OR_OP exp      {
+                            $$ = handle_bin_numeric_op(program, $1, $3, ORB);
+-
+    }
+    | exp PLUS exp       {
+                            $$ = handle_bin_numeric_op(program, $1, $3, ADD);
+@@ -677,38 +570,6 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                                  (program, exp_r0, $2, SUB);
+                         }
+                      }
+-    | IS_FULL IDENTIFIER 
+-	{  
+-		int reg = loadArrayElement(program, $2, create_expression(0, IMMEDIATE));
+-		int arraySize = getArrayLenght($2);
+-		
+-		if (arraySize <= 0)
+-			yyerror("error\n");
+-
+-		int returnReg = getNewRegister(program);
+-		
+-		gen_subi_instruction(program, returnReg, reg, arraySize - 1);
+-		
+-		gen_notl_instruction(program, returnReg, returnReg);
+-		$$ = create_expression(returnReg, REGISTER);
+-
+-		free($2);
+-	}
+-	| IS_EMPTY IDENTIFIER 
+-	{
+-		int reg = loadArrayElement(program, $2, create_expression(0, IMMEDIATE));
+-		int arraySize = getArrayLenght($2);
+-		
+-		if (arraySize <= 0)
+-			yyerror("error\n");
+-		
+-		int returnReg = getNewRegister(program);
+-		
+-		gen_notl_instruction(program, returnReg, reg);
+-
+-		$$ = create_expression(returnReg, REGISTER);
+-		free($2);
+-	}
+ ;
+ 
+ %%
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index f02a6f4..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -69,7 +69,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ ":"               { return COLON; }
+ "+"               { return PLUS; }
+ "-"               { return MINUS; }
+-"[*]"             { return SOFT_MULT_OP; }
+ "*"               { return MUL_OP; }
+ "/"               { return DIV_OP; }
+ "%"               { return MOD_OP; }
+diff --git a/acse/Acse.y b/acse/Acse.y
+index ae3b9bd..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -93,16 +93,6 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
+ extern int yylex(void);
+ extern int yyerror(const char* errmsg);
+ 
+-int getRegisterOfExpression(t_axe_expression* exp)
+-{
+-	int reg;
+-	if (exp->expression_type == IMMEDIATE)	
+-		reg = gen_load_immediate(program, exp->value);
+-	else
+-		reg = exp->value;
+-
+-	return reg;
+-}
+ %}
+ %expect 1
+ 
+@@ -134,7 +124,6 @@ int getRegisterOfExpression(t_axe_expression* exp)
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token SOFT_MULT_OP
+ 
+ %token <label> DO
+ %token <while_stmt> WHILE
+@@ -163,7 +152,7 @@ int getRegisterOfExpression(t_axe_expression* exp)
+ %left LT GT LTEQ GTEQ
+ %left SHL_OP SHR_OP
+ %left MINUS PLUS
+-%left MUL_OP SOFT_MULT_OP DIV_OP
++%left MUL_OP DIV_OP
+ %right NOT
+ 
+ /*=========================================================================
+@@ -581,51 +570,6 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                                  (program, exp_r0, $2, SUB);
+                         }
+                      }
+-	| exp SOFT_MULT_OP exp 
+-	{
+-		//if both are IMMEDIATE, just find out the result at compile time
+-		if ($1.expression_type == IMMEDIATE && $3.expression_type == IMMEDIATE)
+-		{
+-			$$ = create_expression($1.value * $3.value, IMMEDIATE);
+-		}
+-		else
+-		{
+-			//find out where left and right operand are located
+-			int lReg = getRegisterOfExpression(&$1);
+-			int rReg = getRegisterOfExpression(&$3);
+-			
+-			//reserve a label for the cycle and for the end 
+-			t_axe_label* outLabel = newLabel(program);
+-			t_axe_label* skipLabel = newLabel(program);
+-
+-			//initialize return value
+-			int returnRegister = gen_load_immediate(program, 0);
+-			int counterRegister = getNewRegister(program);
+-			int copiedLreg = getNewRegister(program);
+-			gen_add_instruction(program, copiedLreg, lReg, REG_0,  CG_DIRECT_ALL);
+-
+-			//if right operand is zero jump out, if is positive skip to the cycle
+-			gen_add_instruction(program, counterRegister, rReg, REG_0, CG_DIRECT_ALL);
+-			gen_beq_instruction(program, outLabel, 0);
+-			gen_bpl_instruction(program, skipLabel, 0);
+-
+-			//only executed if right operand is negative, multiply left and right by -1
+-			gen_sub_instruction(program, counterRegister, REG_0, counterRegister, CG_DIRECT_ALL);
+-			gen_sub_instruction(program, copiedLreg, REG_0, lReg, CG_DIRECT_ALL);
+-
+-			//main cycle
+-			assignLabel(program, skipLabel);
+-			//add left register to return value, subtrack one from the counter
+-			gen_add_instruction(program, returnRegister, returnRegister, copiedLreg, CG_DIRECT_ALL);
+-			gen_subi_instruction(program, counterRegister, counterRegister, 1);
+-			
+-			//if we are not done yet do another cycle
+-			gen_bne_instruction(program, skipLabel, 0);
+-
+-			assignLabel(program, outLabel);
+-			$$ = create_expression(returnRegister, REGISTER); 
+-		}
+-	}
+ ;
+ 
+ %%
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index e7262ea..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -97,7 +97,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "return"          { return RETURN; }
+ "read"            { return READ; }
+ "write"           { return WRITE; }
+-"merge"           { return MERGE; }
+ 
+ {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
+ {DIGIT}+          { yylval.intval = atoi( yytext );
+diff --git a/acse/Acse.y b/acse/Acse.y
+index 92204ca..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -124,7 +124,6 @@ extern int yyerror(const char* errmsg);
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token MERGE
+ 
+ %token <label> DO
+ %token <while_stmt> WHILE
+@@ -571,32 +570,6 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                                  (program, exp_r0, $2, SUB);
+                         }
+                      }
+-	| MERGE exp COMMA exp COMMA exp 
+-	{
+-		if ($6.expression_type == IMMEDIATE)
+-		{
+-			if ($6.value == 0)
+-				$$ = $4;
+-			else
+-				$$ = $2;
+-		}
+-		else
+-		{
+-			int supp = getNewRegister(program);
+-			int negSupp = getNewRegister(program);
+-
+-			gen_andb_instruction(program, REG_0, $6.value, $6.value, CG_DIRECT_ALL);
+-			gen_seq_instruction(program, supp);
+-			gen_notl_instruction(program, negSupp, supp);
+-
+-			t_axe_expression negSupp_exp = create_expression(negSupp, REGISTER);
+-			t_axe_expression supp_exp = create_expression(supp, REGISTER);
+-
+-			t_axe_expression leftHand = handle_bin_numeric_op(program, supp_exp, $4, MUL);
+-			t_axe_expression rightHand = handle_bin_numeric_op(program, negSupp_exp, $2, MUL);
+-			$$ = handle_bin_numeric_op(program, leftHand, rightHand, ADD);
+-		}
+-	}
+ ;
+ 
+ %%
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index b896623..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -97,7 +97,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "return"          { return RETURN; }
+ "read"            { return READ; }
+ "write"           { return WRITE; }
+-"alias"           { return ALIAS; }
+ 
+ {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
+ {DIGIT}+          { yylval.intval = atoi( yytext );
+@@ -107,4 +106,3 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+                     num_error++;
+                     return (-1); /* invalid token */
+                   }
+-
+diff --git a/acse/Acse.y b/acse/Acse.y
+index 1197566..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -93,43 +93,6 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
+ extern int yylex(void);
+ extern int yyerror(const char* errmsg);
+ 
+-char* swappedString1 = NULL;
+-char* swappedString2 = NULL;
+-
+-char* getRealIdentifier(char* originalString)
+-{
+-	if (!isInSwappedContest())
+-		return originalString;
+-
+-	if (strcmp(originalString, swappedString1) == 0)
+-		return swappedString2;
+-
+-	if (strcmp(originalString, swappedString2) == 0)
+-		return swappedString1;
+-
+-	return originalString;
+-}
+-
+-void saveSwapped(char* s1, char* s2)
+-{
+-	swappedString1 = strdup(s1);
+-	swappedString2 = strdup(s2);
+-}
+-
+-void deleteSwapped()
+-{
+-	free(swappedString1);
+-	swappedString1 = NULL;
+-
+-	free(swappedString2);
+-	swappedString2 = NULL;
+-}
+-
+-int isInSwappedContest()
+-{
+-	return (swappedString2 != NULL);
+-}
+-
+ %}
+ %expect 1
+ 
+@@ -161,7 +124,6 @@ int isInSwappedContest()
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token ALIAS
+ 
+ %token <label> DO
+ %token <while_stmt> WHILE
+@@ -274,21 +236,6 @@ code_block  : statement                  { /* does nothing */ }
+             | LBRACE statements RBRACE   { /* does nothing */ }
+ ;
+ 
+-alias_block : ALIAS IDENTIFIER IDENTIFIER
+-			{
+-				if (isInSwappedContest())
+-					yyerror("multiple alias blocks");
+-				saveSwapped($2, $3);
+-			} 
+-			LBRACE statements RBRACE
+-			{
+-				deleteSwapped();
+-				free($2);
+-				free($3);
+-			}
+-;
+-
+-
+ /* One or more code statements */
+ statements  : statements statement       { /* does nothing */ }
+             | statement                  { /* does nothing */ }
+@@ -306,7 +253,6 @@ control_statement : if_statement         { /* does nothing */ }
+             | while_statement            { /* does nothing */ }
+             | do_while_statement SEMI    { /* does nothing */ }
+             | return_statement SEMI      { /* does nothing */ }
+-            | alias_block                {}
+ ;
+ 
+ read_write_statement : read_statement  { /* does nothing */ }
+@@ -321,7 +267,7 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
+                 * the array/pointer identifier, $3 is an expression
+                 * that holds an integer value. That value will be
+                 * used as an index for the array $1 */
+-               storeArrayElement(program, getRealIdentifier($1), $3, $6);
++               storeArrayElement(program, $1, $3, $6);
+ 
+                /* free the memory associated with the IDENTIFIER.
+                 * The use of the free instruction is required
+@@ -346,7 +292,7 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
+                 * the variable with $1 as identifier */
+                
+                /* get the location of the symbol with the given ID. */
+-               location = get_symbol_location(program, getRealIdentifier($1), 0);
++               location = get_symbol_location(program, $1, 0);
+ 
+                /* update the value of location */
+                if ($3.expression_type == IMMEDIATE)
+@@ -482,7 +428,7 @@ read_statement : READ LPAR IDENTIFIER RPAR
+                
+                /* lookup the symbol table and fetch the register location
+                 * associated with the IDENTIFIER $3. */
+-               location = get_symbol_location(program, getRealIdentifier($3), 0);
++               location = get_symbol_location(program, $3, 0);
+ 
+                /* insert a read instruction */
+                gen_read_instruction (program, location);
+@@ -516,7 +462,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                      int location;
+    
+                      /* get the location of the symbol with the given ID */
+-                     location = get_symbol_location(program, getRealIdentifier($1), 0);
++                     location = get_symbol_location(program, $1, 0);
+                      
+                      /* return the register location of IDENTIFIER as
+                       * a value for `exp' */
+@@ -530,7 +476,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                      
+                      /* load the value IDENTIFIER[exp]
+                       * into `arrayElement' */
+-                     reg = loadArrayElement(program, getRealIdentifier($1), $3);
++                     reg = loadArrayElement(program, $1, $3);
+ 
+                      /* create a new expression */
+                      $$ = create_expression (reg, REGISTER);
+@@ -549,7 +495,7 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+    
+                            /* get the location of the symbol with the given ID */
+                            identifier_location =
+-                                 get_symbol_location(program, getRealIdentifier($2), 0);
++                                 get_symbol_location(program, $2, 0);
+ 
+                            /* generate a NOT instruction. In order to do this,
+                             * at first we have to ask for a free register where
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index b9037ee..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -97,10 +97,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "return"          { return RETURN; }
+ "read"            { return READ; }
+ "write"           { return WRITE; }
+-"sum"             { return SUM; }
+-"out"             { return OUT; }
+-"of"              { return OF; }
+-"as"              { return AS; }
+ 
+ {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
+ {DIGIT}+          { yylval.intval = atoi( yytext );
+diff --git a/acse/Acse.y b/acse/Acse.y
+index 7900080..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -93,23 +93,6 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
+ extern int yylex(void);
+ extern int yyerror(const char* errmsg);
+ 
+-
+-int isArray(char* ID)
+-{
+-	t_axe_variable* var = getVariable(program, ID);
+-	return (var && var->isArray);
+-}
+-
+-int getArrayLenght(char* ID)
+-{
+-	t_axe_variable* var = getVariable(program, ID);
+-
+-	if (!var || !var->isArray)
+-		return -1;
+-
+-	return var->arraySize;
+-}
+-
+ %}
+ %expect 1
+ 
+@@ -141,11 +124,7 @@ int getArrayLenght(char* ID)
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token OF
+ 
+-%token <label> SUM
+-%token <label> OUT
+-%token <expr> AS
+ %token <label> DO
+ %token <while_stmt> WHILE
+ %token <label> IF
+@@ -158,7 +137,6 @@ int getArrayLenght(char* ID)
+ %type <decl> declaration
+ %type <list> declaration_list
+ %type <label> if_stmt
+-%type <expr> sum_out_of
+ 
+ /*=========================================================================
+                           OPERATOR PRECEDENCES
+@@ -329,11 +307,6 @@ assign_statement : IDENTIFIER LSQUARE exp RSQUARE ASSIGN exp
+                /* free the memory associated with the IDENTIFIER */
+                free($1);
+             }
+-			| IDENTIFIER ASSIGN sum_out_of {
+-				int reg = get_symbol_location(program, $1, 0);
+-				gen_addi_instruction(program, reg, $3.value, 0);
+-				free($1);
+-			}
+ ;
+             
+ if_statement   : if_stmt
+@@ -599,75 +572,6 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                      }
+ ;
+ 
+-sum_out_of	: SUM IDENTIFIER COMMA IDENTIFIER OUT OF IDENTIFIER AS 
+-			{
+-				if (!isArray($7))
+-					notifyError(AXE_INVALID_VARIABLE);
+-				
+-				//iteration label
+-				$1 = newLabel(program); 
+-				//out label
+-				$5 = newLabel(program);
+-				//out expression
+-				$8 = create_expression(getNewRegister(program), REGISTER);
+-
+-				//iteration counter
+-				int counterReg = getNewRegister(program);
+-				int endPoint = getArrayLenght($7) - 1;
+-
+-				//expression of the cunter
+-				t_axe_expression counterExp = create_expression(counterReg, REGISTER);
+-
+-				//position of the provided variables
+-				int firstReg = get_symbol_location(program, $2, 0);
+-				int secondReg = get_symbol_location(program, $4, 0);
+-				
+-				//set counter to zero, set out accumulator to zero
+-				gen_move_immediate(program, counterReg, 0);
+-				gen_move_immediate(program, $8.value, 0);
+-
+-				//fix iteration label
+-				assignLabel(program, $1);
+-			
+-				//get a register used to save partial values	
+-				int helperReg = getNewRegister(program);
+-				//check if we reached the end of the array
+-				gen_subi_instruction(program, helperReg, counterReg, endPoint);
+-				//if we did, we jump out
+-				gen_beq_instruction(program, $5, 0);
+-
+-				//load an element and store into the first variable
+-				helperReg = loadArrayElement(program, $7, counterExp);
+-				gen_addi_instruction(program, firstReg, helperReg, 0);
+-
+-				//increase the counter by one
+-				gen_addi_instruction(program, counterReg, counterReg, 1);
+-				
+-				//load the next element and store it into the second variable	
+-				helperReg = loadArrayElement(program, $7, counterExp);
+-				gen_addi_instruction(program, secondReg, helperReg, 0);
+-				
+-			} 
+-			exp
+-			{
+-				//accumulate	
+-				if ($10.expression_type == IMMEDIATE)
+-					gen_addi_instruction(program, $8.value, $8.value, $10.value);
+-				else
+-					gen_add_instruction(program, $8.value, $8.value, $10.value, CG_DIRECT_ALL);
+-
+-				//jump back
+-				gen_bt_instruction(program, $1, 0);
+-
+-				//fix out label
+-				assignLabel(program, $5);
+-				free($7);
+-				free($2);
+-				free($4);
+-				$$ = $8;
+-			}
+-;
+-
+ %%
+ /*=========================================================================
+                                   MAIN
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index 25ca3a0..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -97,12 +97,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "return"          { return RETURN; }
+ "read"            { return READ; }
+ "write"           { return WRITE; }
+-"push"            { return PUSH; }
+-"pop"             { return POP; }
+-"into"            { return INTO; }
+-"from"            { return FROM; }
+-"is-full"         { return IS_FULL; }
+-"is-empty"        { return IS_EMPTY; }
+ 
+ {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
+ {DIGIT}+          { yylval.intval = atoi( yytext );
+diff --git a/acse/Acse.y b/acse/Acse.y
+index ac02590..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -93,46 +93,6 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
+ extern int yylex(void);
+ extern int yyerror(const char* errmsg);
+ 
+-char* getMetadataID(char* ID)
+-{
+-	char* newName = (char*) malloc((strlen(ID) + 2)* sizeof(char));
+-	newName[0] = '_';
+-	strcpy(newName + 1, ID);
+-
+-	return newName;
+-}
+-
+-int isArray(char *ID)
+-{
+-	t_axe_variable* var = getVariable(program, ID);
+-	return (var && var->isArray);
+-}
+-
+-int getArrayLenght(char* ID)
+-{
+-	t_axe_variable* var = getVariable(program, ID);
+-
+-	if (!var || !var->isArray)
+-		return -1;
+-
+-	return var->arraySize;
+-}
+-
+-int getRegisterOfExpression(t_axe_expression* exp)
+-{
+-	if (exp->expression_type == IMMEDIATE)
+-		return gen_load_immediate(program, exp->value);
+-	else
+-		return exp->value;
+-}
+-
+-t_axe_declaration* allocateMetadataDeclaration(t_axe_declaration* decl)
+-{
+-	if (!decl->isArray)
+-		return 0;
+-
+-	return alloc_declaration(getMetadataID(decl->ID), 0, 0, 0);
+-}
+ %}
+ %expect 1
+ 
+@@ -164,12 +124,6 @@ t_axe_declaration* allocateMetadataDeclaration(t_axe_declaration* decl)
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token PUSH
+-%token POP
+-%token FROM
+-%token INTO
+-%token IS_EMPTY
+-%token IS_FULL
+ 
+ %token <label> DO
+ %token <while_stmt> WHILE
+@@ -239,17 +193,11 @@ var_declaration   : TYPE declaration_list SEMI
+ declaration_list  : declaration_list COMMA declaration
+                   {  /* add the new declaration to the list of declarations */
+                      $$ = addElement($1, $3, -1);
+-                     t_axe_declaration* metaData = allocateMetadataDeclaration($3);
+-                     if (metaData)
+-                       $$ = addElement($$, metaData, -1);
+                   }
+                   | declaration
+                   {
+                      /* add the new declaration to the list of declarations */
+                      $$ = addElement(NULL, $1, -1);
+-                     t_axe_declaration* metaData = allocateMetadataDeclaration($1);
+-                     if (metaData)
+-                       $$ = addElement($$, metaData, -1);
+                   }
+ ;
+ 
+@@ -298,63 +246,9 @@ statements  : statements statement       { /* does nothing */ }
+ statement   : assign_statement SEMI      { /* does nothing */ }
+             | control_statement          { /* does nothing */ }
+             | read_write_statement SEMI  { /* does nothing */ }
+-			| push_pop_statemet SEMI     {}
+             | SEMI            { gen_nop_instruction(program); }
+ ;
+ 
+-push_pop_statemet : push_statement {}
+-				  | pop_statement  {}
+-;
+-
+-push_statement : PUSH exp INTO IDENTIFIER
+-			   {
+-					if (!isArray($4))     
+-						notifyError(AXE_INVALID_VARIABLE);
+-					char* metaDataID = getMetadataID($4);
+-					
+-					int arrySize = getArrayLenght($4);
+-					int metaDataReg = get_symbol_location(program, metaDataID, 0);
+-					int suppReg = getNewRegister(program);
+-					t_axe_label* skipLabel = newLabel(program);
+-					
+-					gen_subi_instruction(program, suppReg, metaDataReg, arrySize);
+-					gen_beq_instruction(program, skipLabel, 0);
+-
+-					storeArrayElement(program, $4, create_expression(metaDataReg, REGISTER), $2);
+-					gen_addi_instruction(program, metaDataReg, metaDataReg, 1);
+-					
+-					assignLabel(program, skipLabel);
+-					
+-					free(metaDataID);
+-					free($4);
+-               }
+-;
+-
+-pop_statement : POP IDENTIFIER FROM IDENTIFIER
+-			  {
+-					if (!isArray($4))     
+-						notifyError(AXE_INVALID_VARIABLE);
+-					
+-					char* metaDataID = getMetadataID($4);
+-
+-					int metaDataReg = get_symbol_location(program, metaDataID, 0);
+-					int intoReg = get_symbol_location(program, $2, 0);
+-					t_axe_label* skipLabel = newLabel(program);
+-					
+-					gen_andb_instruction(program, metaDataReg, metaDataReg, metaDataReg, CG_DIRECT_ALL);
+-					gen_beq_instruction(program, skipLabel, 0);
+-					int valReg = loadArrayElement(program, $4, create_expression(metaDataReg, REGISTER));
+-					gen_addi_instruction(program, intoReg, valReg, 0);
+-					gen_subi_instruction(program, metaDataReg, metaDataReg, 1);
+-					
+-					assignLabel(program, skipLabel);
+-
+-					free($4);
+-					free(metaDataID);
+-					free($2);
+-			  }
+-;
+-
+ control_statement : if_statement         { /* does nothing */ }
+             | while_statement            { /* does nothing */ }
+             | do_while_statement SEMI    { /* does nothing */ }
+@@ -676,41 +570,6 @@ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+                                  (program, exp_r0, $2, SUB);
+                         }
+                      }
+-	| IS_FULL IDENTIFIER 
+-	{
+-		if (!isArray($2))
+-			notifyError(AXE_INVALID_VARIABLE);
+-
+-		char* metaDataID = getMetadataID($2);
+-		int arraySize = getArrayLenght($2);
+-		int metaDataReg = get_symbol_location(program, metaDataID, 0);
+-
+-		int outReg = getNewRegister(program);
+-
+-		gen_subi_instruction(program, outReg, metaDataReg, arraySize);
+-		gen_seq_instruction(program, outReg);
+-
+-		$$ = create_expression(outReg, REGISTER);
+-			
+-		free($2);
+-	}
+-
+-	| IS_EMPTY IDENTIFIER
+-	{
+-		if (!isArray($2))
+-			notifyError(AXE_INVALID_VARIABLE);
+-
+-		char* metaDataID = getMetadataID($2);
+-		
+-		int metaDataReg = get_symbol_location(program, metaDataID, 0);
+-		int outReg = getNewRegister(program);
+-		gen_addi_instruction(program, outReg, metaDataReg, 0);
+-		gen_seq_instruction(program, outReg);
+-		$$ = create_expression(outReg, REGISTER);
+-
+-		free(metaDataID);
+-		free($2);
+-	}
+ ;
+ 
+ %%
+ 
+ 
+ 
+diff --git a/acse/Acse.lex b/acse/Acse.lex
+index 3c000f6..663b2db 100644
+--- a/acse/Acse.lex
++++ b/acse/Acse.lex
+@@ -97,7 +97,6 @@ ID       [a-zA-Z_][a-zA-Z0-9_]*
+ "return"          { return RETURN; }
+ "read"            { return READ; }
+ "write"           { return WRITE; }
+-"red"             { return REDUCTION; }
+ 
+ {ID}              { yylval.svalue=strdup(yytext); return IDENTIFIER; }
+ {DIGIT}+          { yylval.intval = atoi( yytext );
+diff --git a/acse/Acse.y b/acse/Acse.y
+index 10e5b36..ec9ef8b 100644
+--- a/acse/Acse.y
++++ b/acse/Acse.y
+@@ -93,29 +93,6 @@ t_io_infos *file_infos;    /* input and output files used by the compiler */
+ extern int yylex(void);
+ extern int yyerror(const char* errmsg);
+ 
+-
+-int isArray(char* ID)
+-{
+-	t_axe_variable* var = getVariable(program, ID);
+-	if (!var)
+-		return 0;
+-	
+-	return var->isArray;
+-}
+-
+-int getArrayLenght(char* ID)
+-{
+-	t_axe_variable* var = getVariable(program, ID);
+-
+-	if (!var)
+-		return -1;
+-
+-	if (!var->isArray)
+-		return -1;
+-
+-	return var->arraySize;
+-}
+-
+ %}
+ %expect 1
+ 
+@@ -147,7 +124,6 @@ int getArrayLenght(char* ID)
+ %token RETURN
+ %token READ
+ %token WRITE
+-%token REDUCTION
+ 
+ %token <label> DO
+ %token <while_stmt> WHILE
+@@ -482,40 +458,6 @@ write_statement : WRITE LPAR exp RPAR
+ ;
+ 
+ exp: NUMBER      { $$ = create_expression ($1, IMMEDIATE); }
+-   | REDUCTION LPAR IDENTIFIER RPAR {
+-
+-		//stop parsing if the identifier is not a array
+-		if (!isArray($3))		
+-			notifyError(AXE_INVALID_INSTRUCTION);
+-
+-		//find out the size
+-		int arraySize = getArrayLenght($3);
+-		//reserve space for accumulator and counter
+-		int acc = getNewRegister(program);
+-		int ctr = getNewRegister(program);
+-
+-		//set accumulator to zero, counter to array size
+-		gen_move_immediate(program, acc, 0);
+-		gen_move_immediate(program, ctr, arraySize);
+-
+-		//fix a label used to iterate
+-		t_axe_label* label = newLabel(program);
+-		assignLabel(program, label);
+-
+-		//next step of the iteration
+-		gen_subi_instruction(program, ctr, ctr, 1);
+-		
+-		//load a array member based on the counter		
+-		int loadedValue = loadArrayElement(program, $3, create_expression(ctr, REGISTER));
+-
+-		//add to the accumulator, check if counter reaced zero, if not jump back
+-		gen_add_instruction(program, acc, acc, loadedValue, CG_DIRECT_ALL);
+-		gen_andb_instruction(program, ctr, ctr, ctr, CG_DIRECT_ALL);
+-		gen_bne_instruction(program, label, 0);
+-		
+-		$$ = create_expression(acc, REGISTER);
+-		free($3);
+-   }
+    | IDENTIFIER  {
+                      int location;
+    
+ 
+ 
+ 
